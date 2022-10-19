@@ -23,6 +23,7 @@ def train(env_name):
 			action = agent.choose_action(observation)
 			observation_, reward, done, info = env.step(action)
 			agent.store_transition(observation, action, reward, observation_, done)
+			agent.learn()
 			score += reward
 			steps += 1
 			observation = observation_

@@ -3,11 +3,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from torch.nn.parameter import Parameter
-from networks import DynamicsModel
+from networks import ActorNetwork, DynamicsModel
 from utils import ReplayBuffer
 
 class Agent:
-	def __init__(self, state_dim, action_dim, max_action, gamma=0.99,
+	def __init__(self, state_dim, action_dim, max_action, alpha=0.0003, gamma=0.99,
 				max_size=100_000, batch_size=64, ensemble_size=3):
 		# init hyperparameters
 		self.gamma = gamma
@@ -22,6 +22,7 @@ class Agent:
 		self.max_action = max_action
 
 		# init networks
+		self.actor = ActorNetwork(alpha, state_dim, action_dim, max_action)
 		self.memory = ReplayBuffer(max_size, state_dim, action_dim)
 		self.ensemble = self.init_model_ensemble()
 		self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -33,6 +34,8 @@ class Agent:
 		return ensemble
 
 	def calc_disagreement(self, state, action):
+		# TODO: make mode_predictions hold the correct shape
+		# (k, B, S)
 		model_predictions = torch.zeros((self.ensemble_size, self.state_dim))
 		for i, model in enumerate(self.ensemble):
 			mu, sigma = model(state, action)
@@ -44,24 +47,12 @@ class Agent:
 		self.memory.store_transition(state, action, reward, state_, done)
 
 	def choose_action(self, state):
-		# initialize action uniformly between valid range
 		state = torch.tensor([state]).to(self.device)
-		print(f"State shape: {state.shape}")
-		action = torch.rand((1, self.action_dim)).to(self.device)
-		action = self.max_action * (action * 2 - 1)
-		action.requires_grad_()
-
-		optimizer = optim.Adam([action], lr=0.01)
-		for i in range(self.planning_iters):
-			optimizer.zero_grad()
-			disagreement_loss = -self.calc_disagreement(state, action)
-			# print(f"Optimizing action step {i}, disagreement={disagreement_loss.item()} action={action}")
-			disagreement_loss.backward()
-			optimizer.step()
-
-		return action.cpu().detach().numpy()
+		actions = self.actor.sample_normal(state, reparameterize=False)
+		return actions.cpu().detach().numpy()[0]
 
 	def learn(self):
+		print(f"Learning. Memory counter: {self.memory.mem_ctr}")
 		if self.memory.mem_ctr < self.batch_size:
 			return # don't learn until we can sample at least a full batch
 
@@ -69,13 +60,25 @@ class Agent:
 		states, actions, rewards, states_, done = self.memory.sample_buffer(self.batch_size)
 
 		# Convert from numpy arrays to torch tensors for computation graph
-		states = torch.tensor([states], dtype=torch.float).to(self.actor.device)
-		actions = torch.tensor([actions], dtype=torch.float).to(self.actor.device)
-		states_ = torch.tensor([states_], dtype=torch.float).to(self.actor.device)
+		states = torch.tensor(states, dtype=torch.float).to(self.actor.device)
+		actions = torch.tensor(actions, dtype=torch.float).to(self.actor.device)
+		states_ = torch.tensor(states_, dtype=torch.float).to(self.actor.device)
 		rewards = torch.tensor(rewards, dtype=torch.float).to(self.actor.device)
 		done = torch.tensor(done, dtype=torch.float).to(self.actor.device)
 
-		# Do one gradient step for all models in ensemble
+		# <---- ACTOR UPDATE ---->
+		self.actor.optimizer.zero_grad()
+		horizon = 10
+		disagreement_loss = 0
+		for _ in range(horizon):
+			actions = self.actor.sample_normal(states, reparameterize=True)
+			disagreement_loss += self.calc_disagreement(states, actions)
+			random_model = random.choice(self.ensemble)
+			states = random_model(states, actions)
+		disagreement_loss.backward()
+		self.actor.optimizer.step()
+
+		# <---- ENSEMBLE UPDATE ---->
 		for model in self.ensemble:
 			model.optimizer.zero_grad()
 			next_states = model(states, actions)
