@@ -4,4 +4,6 @@ Using an ensemble of learned dynamics models, we construct a disagreement loss t
 
 # TODO
 
-- At each step before executing an action, optimize the actor parameters w.r.t. the intrinsic loss of an n-step trajectory. We can linearly expand this horizon during training
+- 1) Collect random experience from the environment
+- 2) Learn ensemble of world models using experience (for a fixed number of steps)
+- 3) Collect experience using Actor policy and update params after every step

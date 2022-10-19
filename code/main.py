@@ -11,9 +11,16 @@ def train(env_name):
 	agent = Agent(env.observation_space.shape[0], \
 					env.action_space.shape[0], env.action_space.high[0])
 	total_steps = 3e5
+	ensemble_learn_interval = 1_000
+	random_steps = 10_000
 	best_score = env.reward_range[0] # init to smallest possible reward
 	scores = []
 	steps, episodes = 0, 0
+
+	# Fill replay buffer with random transitions to train initial ensemble
+	collect_random_experience(env, agent, random_steps)
+
+	# Update policy at each step, and update ensemble every K steps
 	while steps < total_steps:
 		done = False
 		observation = env.reset()
@@ -23,7 +30,9 @@ def train(env_name):
 			action = agent.choose_action(observation)
 			observation_, reward, done, info = env.step(action)
 			agent.store_transition(observation, action, reward, observation_, done)
-			agent.learn()
+			if steps % ensemble_learn_interval == 0:
+				agent.learn_ensemble()
+			agent.learn_policy()
 			score += reward
 			steps += 1
 			observation = observation_
@@ -33,12 +42,26 @@ def train(env_name):
 		if avg_score > best_score:
 			best_score = avg_score
 			agent.save_models()
-		print(f"Episode {episodes}, score: {score}, avg_score: {avg_score}")
+		print(f"Episode {episodes}, steps: {steps}, score: {score}, avg_score: {avg_score}")
 	
 	env.close()
 	filename = f'{env_name}_{episodes}_games'
 	figure_file = f'../plots/{filename}.png'
 	plot_learning_curve(scores, figure_file)
+
+def collect_random_experience(env, agent, total_steps):
+	print("Collecting random experience")
+	steps = 0
+	while steps < total_steps:
+		done = False
+		observation = env.reset()
+		while not done:
+			action = env.action_space.sample()
+			observation_, reward, done, info = env.step(action)
+			agent.store_transition(observation, action, reward, observation_, done)
+			steps += 1
+			observation = observation_
+	print("Finished collecting random experience")
 
 if __name__ == '__main__':
 	arg_env_name = 'Pendulum-v1'

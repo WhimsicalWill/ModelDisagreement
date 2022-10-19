@@ -37,7 +37,7 @@ class DynamicsModel(nn.Module):
 		self.to(self.device)
 
 	def forward(self, state, action):
-		print(f"Shapes: {state.shape}, {action.shape}")
+		# print(f"Shapes: {state.shape}, {action.shape}")
 		x = torch.cat([state, action], dim=1)
 		x = self.fc1(x)
 		x = F.relu(x)
@@ -57,12 +57,7 @@ class DynamicsModel(nn.Module):
 		else:
 			next_state = probabilities.sample() # sample is non-differentiable
 
-		action = torch.tanh(actions) * torch.tensor(self.max_action).to(self.device)
-		log_probs = probabilities.log_prob(actions)
-		log_probs -= torch.log(1 - action.pow(2) + self.reparam_noise) # TODO: what is this doing
-		log_probs = log_probs.sum(1, keepdim=True) # idk if this is necessary (summing over only 1 col?)
-
-		return action, log_probs
+		return next_state
 
 	def save_checkpoint(self):
 		torch.save(self.state_dict(), self.chkpt_file)
