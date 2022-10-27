@@ -2,29 +2,35 @@ import gym
 import sys
 import getopt
 import numpy as np
-from agent_class import Agent
-import time
+import torch
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from agent_class import Agent, device
 from utils import plot_learning_curve, render_games
 
 def train(env_name):
 	env = gym.make(env_name)
+	s1, s2 = env.observation_space.shape[0], env.action_space.shape[0]
+	print(f"ObsShape: {s1}, ActionShape: {s2}")
 	agent = Agent(env.observation_space.shape[0], \
 					env.action_space.shape[0], env.action_space.high[0])
-	total_steps = 3e5
+	total_steps = 3e4
 	ensemble_learn_interval = 1_000
+	test_interval = total_steps // 10
 	random_steps = 10_000
 	best_score = env.reward_range[0] # init to smallest possible reward
 	scores = []
 	steps, episodes = 0, 0
 
 	# Fill replay buffer with random transitions to train initial ensemble
-	collect_random_experience(env, agent, random_steps)
+	burn_in(env, agent, random_steps)
 
 	# Update policy at each step, and update ensemble every K steps
+	pbar = tqdm(total=total_steps)
 	while steps < total_steps:
-		done = False
+		done, testFlag = False, False
 		observation = env.reset()
-		score = 0
+		score, prevSteps = 0, steps
 		episodes += 1
 		while not done:
 			action = agent.choose_action(observation)
@@ -32,24 +38,32 @@ def train(env_name):
 			agent.store_transition(observation, action, reward, observation_, done)
 			if steps % ensemble_learn_interval == 0:
 				agent.learn_ensemble()
+			if steps % test_interval == 0:
+				testFlag = True
 			agent.learn_policy()
 			score += reward
 			steps += 1
 			observation = observation_
+		pbar.update(steps - prevSteps)
 		scores.append(score)
 		avg_score = np.mean(scores[-100:])
+
+		if testFlag:
+			test_agent(env, agent)
+			testFlag = False
 
 		if avg_score > best_score:
 			best_score = avg_score
 			agent.save_models()
-		print(f"Episode {episodes}, steps: {steps}, score: {score}, avg_score: {avg_score}")
+		# print(f"Episode {episodes}, steps: {steps}, score: {score}, avg_score: {avg_score}")
 	
+	pbar.close()
 	env.close()
 	filename = f'{env_name}_{episodes}_games'
 	figure_file = f'../plots/{filename}.png'
 	plot_learning_curve(scores, figure_file)
 
-def collect_random_experience(env, agent, total_steps):
+def burn_in(env, agent, total_steps):
 	print("Collecting random experience")
 	steps = 0
 	while steps < total_steps:
@@ -62,6 +76,30 @@ def collect_random_experience(env, agent, total_steps):
 			steps += 1
 			observation = observation_
 	print("Finished collecting random experience")
+
+def test_agent(env, agent):
+
+	def get_ensemble_disagreement(state, action):
+		state = torch.tensor([state], dtype=torch.float).to(device)
+		action = torch.tensor([action], dtype=torch.float).to(device)
+		return agent.calc_disagreement(state, action).item()
+
+	rewards_i, rewards = [], []
+	test_eps = 20
+	for ep in range(test_eps):
+		done, score_i, score = False, 0, 0
+		state = env.reset()
+		while not done:
+			action = agent.choose_action(state)
+			state_, reward, done, info = env.step(action)
+			score_i += get_ensemble_disagreement(state, action)
+			score += reward
+			state = state_
+		rewards_i.append(score_i)
+		rewards.append(score)
+	avg_i, avg = sum(rewards_i)/test_eps, sum(rewards)/test_eps
+	print(f"I: {avg_i}, E: {avg}")
+
 
 if __name__ == '__main__':
 	arg_env_name = 'Pendulum-v1'

@@ -7,3 +7,4 @@ Using an ensemble of learned dynamics models, we construct a disagreement loss t
 - 1) Collect random experience from the environment
 - 2) Learn ensemble of world models using experience (for a fixed number of steps)
 - 3) Collect experience using Actor policy and update params after every step
+- 4) Use tqdm for viewing progress
