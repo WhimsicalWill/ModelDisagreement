@@ -52,7 +52,7 @@ class Agent:
 		actions = self.actor.sample_normal(state, reparameterize=False)
 		return actions.cpu().detach().numpy()[0]
 
-	def learn_policy(self):
+	def learn_policy(self, horizon=1):
 		# TODO: make policy access the aggregate memory of all models
 		if self.memory[0].mem_ctr < self.batch_size:
 			return # don't learn until we can sample at least a full batch
@@ -69,13 +69,12 @@ class Agent:
 
 		# <---- ACTOR UPDATE ---->
 		self.actor.optimizer.zero_grad()
-		horizon = 1 # 10
 		disagreement_loss = 0
 		for _ in range(horizon):
 			actions = self.actor.sample_normal(states, reparameterize=True)
 			disagreement_loss -= self.calc_disagreement(states, actions)
 			random_model = random.choice(self.ensemble)
-			states = random_model(states, actions)
+			states = random_model.sample_normal(states, actions)
 		disagreement_loss.backward()
 		self.actor.optimizer.step()
 

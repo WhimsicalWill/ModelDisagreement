@@ -2,6 +2,7 @@ import gym
 import sys
 import getopt
 import random
+import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -11,49 +12,42 @@ from utils import plot_learning_curve, render_games
 
 def train(env_name):
 	env = gym.make(env_name)
-	s1, s2 = env.observation_space.shape[0], env.action_space.shape[0]
-	print(f"ObsShape: {s1}, ActionShape: {s2}")
-	agent = Agent(env.observation_space.shape[0], \
-					env.action_space.shape[0], env.action_space.high[0])
-	total_steps = 1.5e4
-	ensemble_learn_interval = 5_000
-	# test_interval = total_steps // 10
-	random_steps = 10_000
-	best_score = env.reward_range[0] # init to smallest possible reward
+	dim1, dim2 = env.observation_space.shape[0], env.action_space.shape[0]
+	print(f"ObsShape: {dim1}, ActionShape: {dim2}")
+	agent = Agent(dim1, dim2, env.action_space.high[0])
+	num_train_eps = 100
+	ensemble_learn_interval = 20 # 20 * 200 = 4000 steps per update 
+	burn_in_steps = 10_000
 	test_rewards_i, test_rewards = [], []
-	steps, episodes = 0, 0
 
 	# Fill replay buffer with random transitions to train initial ensemble
-	burn_in(env, agent, random_steps)
+	burn_in(env, agent, burn_in_steps)
 
 	# Update policy at each step, and update ensemble every K steps
-	pbar = tqdm(total=total_steps)
-	while steps < total_steps:
-		done, testFlag = False, False
+	pbar = tqdm(total=num_train_eps, position=0, leave=True)
+	for ep in range(num_train_eps):
+		if ep % ensemble_learn_interval == 0:
+			print(f"Learning ensemble, Episode={ep}")
+			r_i, r = test_agent(env, agent)
+			test_rewards_i.append(r_i)
+			test_rewards.append(r)
+			agent.learn_ensemble(50)
+		if ep % (num_train_eps // 5) == 0:
+			test_video(agent, env, env_name, ep)
+		done = False
 		observation = env.reset()
-		score, prevSteps = 0, steps
-		episodes += 1
 		while not done:
 			action = agent.choose_action(observation)
 			observation_, reward, done, info = env.step(action)
 			agent.store_transition(observation, action, reward, observation_, done)
-			if steps % ensemble_learn_interval == 0:
-				print(f"Testing (1), Learning ensemble, Testing (2) | Step={steps}")
-				r_i, r = test_agent(env, agent)
-				test_rewards_i.append(r_i)
-				test_rewards.append(r)
-				agent.learn_ensemble()
-				test_agent(env, agent)
-			agent.learn_policy()
-			steps += 1
+			agent.learn_policy(3)
 			observation = observation_
-		pbar.update(steps - prevSteps)
+		pbar.update(1)
 	pbar.close()
 	env.close()
-	filename = f'{env_name}_{episodes}_games'
-	figure_file = f'../plots/{filename}_r_i.png'
+	filename = f'{env_name}_{num_train_eps}_games'
+	figure_file = f'../plots/{filename}.png'
 	plot_learning_curve(test_rewards_i, figure_file)
-	figure_file = f'../plots/{filename}_r.png'
 	plot_learning_curve(test_rewards, figure_file)
 
 def burn_in(env, agent, total_steps):
@@ -93,6 +87,21 @@ def test_agent(env, agent):
 	avg_i, avg = sum(rewards_i)/test_eps, sum(rewards)/test_eps
 	print(f"I: {avg_i}, E: {avg}")
 	return avg_i, avg
+
+def test_video(agent, env, env_name, ep):
+	save_path = f"./videos/video-{env_name}-{ep}"
+	if not os.path.exists(save_path):
+		os.mkdir(save_path)
+
+	# To create video
+	env = gym.wrappers.Monitor(env, save_path, force=True)
+	state, done = env.reset(), False
+	while not done:
+		env.render()
+		action = agent.choose_action(state)
+		next_state, reward, done, info = env.step(action)
+		state = next_state
+	env.close()
 
 
 if __name__ == '__main__':
