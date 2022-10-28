@@ -13,6 +13,9 @@ import numpy as np
 # Use online planning with a planning horizon of 1 (we can expand horizon later)
 # Don't overcomplicate things until the workflow works
 
+reparam_noise = 0.001
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
 class DynamicsModel(nn.Module):
 	'''
 	Dynamics Model maps (state, action) -> state
@@ -33,11 +36,9 @@ class DynamicsModel(nn.Module):
 		self.sigma = nn.Linear(fc2_dims, state_dim)
 
 		self.optimizer = optim.Adam(self.parameters(), 0.0003)
-		self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-		self.to(self.device)
+		self.to(device)
 
 	def forward(self, state, action):
-		# print(f"Shapes: {state.shape}, {action.shape}")
 		x = torch.cat([state, action], dim=1)
 		x = self.fc1(x)
 		x = F.relu(x)
@@ -45,7 +46,8 @@ class DynamicsModel(nn.Module):
 		x = F.relu(x)
 
 		mu = self.mu(x)
-		sigma = self.sigma(x)
+		sigma = torch.sigmoid(self.sigma(x)) # bound between 0 and 1
+		sigma = torch.clamp(sigma, min=reparam_noise, max=1)
 		return mu, sigma
 
 	def sample_normal(self, state, action, reparameterize=True):
@@ -85,8 +87,7 @@ class ActorNetwork(nn.Module):
 		self.sigma = nn.Linear(fc2_dims, action_dim)
 
 		self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-		self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-		self.to(self.device)
+		self.to(device)
 
 	def forward(self, state):
 		prob = self.fc1(state)
@@ -95,8 +96,8 @@ class ActorNetwork(nn.Module):
 		prob = F.relu(prob)
 
 		mu = self.mu(prob)
-		sigma = self.sigma(prob)
-		sigma = torch.clamp(sigma, min=self.reparam_noise, max=1)
+		sigma = torch.sigmoid(self.sigma(prob)) # bound between 0 and 1
+		sigma = torch.clamp(sigma, min=reparam_noise)
 		return mu, sigma
 
 	def sample_normal(self, state, reparameterize=True):
@@ -108,7 +109,7 @@ class ActorNetwork(nn.Module):
 		else:
 			actions = probabilities.sample() # sample is non-differentiable
 
-		action = torch.tanh(actions) * torch.tensor(self.max_action).to(self.device)
+		action = torch.tanh(actions) * torch.tensor(self.max_action).to(device)
 		return action
 
 	def save_checkpoint(self):

@@ -13,8 +13,9 @@ from utils import plot_learning_curve, render_games
 def train(env_name):
 	env = gym.make(env_name)
 	dim1, dim2 = env.observation_space.shape[0], env.action_space.shape[0]
-	print(f"ObsShape: {dim1}, ActionShape: {dim2}")
-	agent = Agent(dim1, dim2, env.action_space.high[0])
+	action_high = env.action_space.high[0]
+	print(f"ObsShape: {dim1}, ActionShape: {dim2}, ActionHigh: {action_high}")
+	agent = Agent(dim1, dim2, action_high)
 	num_train_eps = 100
 	ensemble_learn_interval = 20 # 20 * 200 = 4000 steps per update 
 	burn_in_steps = 10_000
@@ -89,16 +90,19 @@ def test_agent(env, agent):
 	return avg_i, avg
 
 def test_video(agent, env, env_name, ep):
-	save_path = f"./videos/video-{env_name}-{ep}"
+	save_path = f"../videos/video-{env_name}-{ep}"
 	if not os.path.exists(save_path):
 		os.mkdir(save_path)
 
 	# To create video
 	env = gym.wrappers.Monitor(env, save_path, force=True)
 	state, done = env.reset(), False
+	action_num = 0
 	while not done:
 		env.render()
 		action = agent.choose_action(state)
+		print(f"Action num {action_num}: {action}")
+		action_num += 1
 		next_state, reward, done, info = env.step(action)
 		state = next_state
 	env.close()
