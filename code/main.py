@@ -1,6 +1,7 @@
 import gym
 import sys
 import getopt
+import random
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -14,12 +15,12 @@ def train(env_name):
 	print(f"ObsShape: {s1}, ActionShape: {s2}")
 	agent = Agent(env.observation_space.shape[0], \
 					env.action_space.shape[0], env.action_space.high[0])
-	total_steps = 3e4
-	ensemble_learn_interval = 1_000
-	test_interval = total_steps // 10
+	total_steps = 1.5e4
+	ensemble_learn_interval = 5_000
+	# test_interval = total_steps // 10
 	random_steps = 10_000
 	best_score = env.reward_range[0] # init to smallest possible reward
-	scores = []
+	test_rewards_i, test_rewards = [], []
 	steps, episodes = 0, 0
 
 	# Fill replay buffer with random transitions to train initial ensemble
@@ -37,31 +38,23 @@ def train(env_name):
 			observation_, reward, done, info = env.step(action)
 			agent.store_transition(observation, action, reward, observation_, done)
 			if steps % ensemble_learn_interval == 0:
+				print(f"Testing (1), Learning ensemble, Testing (2) | Step={steps}")
+				r_i, r = test_agent(env, agent)
+				test_rewards_i.append(r_i)
+				test_rewards.append(r)
 				agent.learn_ensemble()
-			if steps % test_interval == 0:
-				testFlag = True
+				test_agent(env, agent)
 			agent.learn_policy()
-			score += reward
 			steps += 1
 			observation = observation_
 		pbar.update(steps - prevSteps)
-		scores.append(score)
-		avg_score = np.mean(scores[-100:])
-
-		if testFlag:
-			test_agent(env, agent)
-			testFlag = False
-
-		if avg_score > best_score:
-			best_score = avg_score
-			agent.save_models()
-		# print(f"Episode {episodes}, steps: {steps}, score: {score}, avg_score: {avg_score}")
-	
 	pbar.close()
 	env.close()
 	filename = f'{env_name}_{episodes}_games'
-	figure_file = f'../plots/{filename}.png'
-	plot_learning_curve(scores, figure_file)
+	figure_file = f'../plots/{filename}_r_i.png'
+	plot_learning_curve(test_rewards_i, figure_file)
+	figure_file = f'../plots/{filename}_r.png'
+	plot_learning_curve(test_rewards, figure_file)
 
 def burn_in(env, agent, total_steps):
 	print("Collecting random experience")
@@ -85,7 +78,7 @@ def test_agent(env, agent):
 		return agent.calc_disagreement(state, action).item()
 
 	rewards_i, rewards = [], []
-	test_eps = 20
+	test_eps = 10
 	for ep in range(test_eps):
 		done, score_i, score = False, 0, 0
 		state = env.reset()
@@ -99,6 +92,7 @@ def test_agent(env, agent):
 		rewards.append(score)
 	avg_i, avg = sum(rewards_i)/test_eps, sum(rewards)/test_eps
 	print(f"I: {avg_i}, E: {avg}")
+	return avg_i, avg
 
 
 if __name__ == '__main__':
