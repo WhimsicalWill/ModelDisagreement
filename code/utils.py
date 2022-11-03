@@ -1,6 +1,7 @@
 import numpy as np
 import gym
 import time
+import re
 import matplotlib.pyplot as plt
 import agent_class
 
@@ -70,3 +71,18 @@ def render_games(env_name):
 			observation = observation_
 		print(f"Episode {i}, score: {score}")
 	env.close()
+
+def linear_schedule(schdl, step):
+	"""
+	Outputs values following a linear decay schedule.
+	Adapted from https://github.com/facebookresearch/drqv2
+	"""
+	try:
+		return float(schdl)
+	except ValueError:
+		match = re.match(r'linear\((.+),(.+),(.+)\)', schdl)
+		if match:
+			init, final, duration = [float(g) for g in match.groups()]
+			mix = np.clip(step / duration, 0.0, 1.0)
+			return (1.0 - mix) * init + mix * final
+	raise NotImplementedError(schdl)

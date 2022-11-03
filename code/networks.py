@@ -38,8 +38,8 @@ class DynamicsModel(nn.Module):
 		self.optimizer = optim.Adam(self.parameters(), 0.0003)
 		self.to(device)
 
-	def forward(self, state, action):
-		x = torch.cat([state, action], dim=1)
+	def forward(self, state, action, debug=False):
+		x = torch.cat([state, action], dim=-1) # (B, 23)
 		x = self.fc1(x)
 		x = F.relu(x)
 		x = self.fc2(x)
@@ -47,8 +47,13 @@ class DynamicsModel(nn.Module):
 
 		mu = self.mu(x)
 		sigma = torch.sigmoid(self.sigma(x)) # bound between 0 and 1
-		sigma = torch.clamp(sigma, min=reparam_noise, max=1)
-		return mu, sigma
+		sigma_clamp = torch.clamp(sigma, min=reparam_noise) # lower bound for sigma
+
+		if debug:
+			# mu, sigma: (B, 3)
+			print(torch.cat([mu, sigma], dim=-1))
+
+		return mu, sigma_clamp
 
 	def sample_normal(self, state, action, reparameterize=True):
 		mu, sigma = self.forward(state, action)
@@ -97,11 +102,13 @@ class ActorNetwork(nn.Module):
 
 		mu = self.mu(prob)
 		sigma = torch.sigmoid(self.sigma(prob)) # bound between 0 and 1
-		sigma = torch.clamp(sigma, min=reparam_noise)
-		return mu, sigma
+		sigma_clamp = torch.clamp(sigma, min=reparam_noise) # lower bound for sigma
+		return mu, sigma_clamp, sigma
 
 	def sample_normal(self, state, reparameterize=True):
-		mu, sigma = self.forward(state)
+		mu, sigma, before_sigma = self.forward(state)
+		# if state.shape[0] == 1 and np.random.random() < 0.05:
+		# 	print(f"Debug: mu={mu.item()}, before_sigma={before_sigma.item()}, after_sigma={sigma.item()}")
 		probabilities = torch.distributions.Normal(mu, sigma)
 
 		if reparameterize: # use the reparameterization trick

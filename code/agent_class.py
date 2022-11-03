@@ -10,10 +10,9 @@ from utils import ReplayBuffer
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 class Agent:
-	def __init__(self, state_dim, action_dim, max_action, alpha=0.0003, gamma=0.99,
+	def __init__(self, state_dim, action_dim, max_action, alpha=0.0003,
 				max_size=100_000, batch_size=64, ensemble_size=3):
 		# init hyperparameters
-		self.gamma = gamma
 		self.batch_size = batch_size
 		self.ensemble_size = 3
 		self.planning_iters = 100
@@ -36,11 +35,14 @@ class Agent:
 		return ensemble, memory
 
 	def calc_disagreement(self, state, action):
-		model_predictions = torch.zeros((self.ensemble_size, self.batch_size, self.state_dim))
+		# (K, B, S)
+		batch_size = state.shape[0]
+		model_predictions = torch.zeros((self.ensemble_size, batch_size, self.state_dim))
 		for i, model in enumerate(self.ensemble):
 			mu, _ = model(state, action)
 			model_predictions[i, ...] = mu # (B, S)
-		disagreement = torch.var(model_predictions, dim=0).norm() # Frobenius norm of variance matrix
+		var_matrix = torch.var(model_predictions, dim=0).norm() # (B, S)
+		disagreement = torch.mean(torch.norm(var_matrix, dim=0))
 		return disagreement
 
 	def store_transition(self, state, action, reward, state_, done):
@@ -48,7 +50,7 @@ class Agent:
 		random_memory.store_transition(state, action, reward, state_, done)
 
 	def choose_action(self, state):
-		state = torch.tensor([state]).to(device)
+		state = torch.tensor([state], dtype=torch.float).to(device)
 		actions = self.actor.sample_normal(state, reparameterize=False)
 		return actions.cpu().detach().numpy()[0]
 
@@ -78,10 +80,20 @@ class Agent:
 		disagreement_loss.backward()
 		self.actor.optimizer.step()
 
-	# TODO: each ensemble should learn on a different fold of data
-	# Options:
-	# 1) implement this at the replay buffer level (Easy)
-	# 2) Other option is to sample different batches, but this doesn't work
+	def debug_model(self, debug_bs=8):
+		if self.memory[0].mem_ctr < debug_bs:
+			return # don't learn until we can sample at least a full batch
+
+		# Sample memory buffer uniformly
+		states, actions, rewards, states_, done = self.memory[0].sample_buffer(debug_bs)
+
+		states = torch.tensor(states, dtype=torch.float).to(device)
+		# print(states)
+		for action in np.linspace(-1.0, 1.0, 11):
+			action_tensor = torch.ones((debug_bs, self.action_dim), dtype=torch.float).to(device) * self.max_action
+			disagreement = self.calc_disagreement(states, action_tensor)
+			print(f"Disagreement for action {action:.3f} is {disagreement:.3f}")
+		
 	def learn_ensemble(self, ensemble_iters=100):
 		for memory, model in zip(self.memory, self.ensemble):
 			if memory.mem_ctr < self.batch_size:

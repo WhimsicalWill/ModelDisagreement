@@ -6,20 +6,35 @@ import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from hotstarts import HotStarts
+from collect import collect_random_hot_starts
 from tqdm import tqdm
 from agent_class import Agent, device
-from utils import plot_learning_curve, render_games
+from utils import *
 
 def train(env_name):
 	env = gym.make(env_name)
+
+	# number of hot starts to render (must be a square)
+	num_hot_starts = 4
+
+	# setup HotStarts env wrapper
+	saved_hot_starts_dir = 'data'
+	env = HotStarts(env, saved_hot_starts_dir, num_hot_starts)
+	collect_random_hot_starts(env, num_hot_starts)
+
 	dim1, dim2 = env.observation_space.shape[0], env.action_space.shape[0]
 	action_high = env.action_space.high[0]
 	print(f"ObsShape: {dim1}, ActionShape: {dim2}, ActionHigh: {action_high}")
 	agent = Agent(dim1, dim2, action_high)
-	num_train_eps = 100
-	ensemble_learn_interval = 20 # 20 * 200 = 4000 steps per update 
+	num_train_eps = 400
+	ensemble_learn_interval = 1 # 20 * 200 = 4000 steps per update 
 	burn_in_steps = 10_000
 	test_rewards_i, test_rewards = [], []
+
+
+	# Initialize linear schedule for the horizon parameter
+	horizon_schedule = f"linear(1, 10, {num_train_eps})"
 
 	# Fill replay buffer with random transitions to train initial ensemble
 	burn_in(env, agent, burn_in_steps)
@@ -29,27 +44,23 @@ def train(env_name):
 	for ep in range(num_train_eps):
 		if ep % ensemble_learn_interval == 0:
 			print(f"Learning ensemble, Episode={ep}")
-			r_i, r = test_agent(env, agent)
-			test_rewards_i.append(r_i)
-			test_rewards.append(r)
-			agent.learn_ensemble(50)
-		if ep % (num_train_eps // 5) == 0:
-			test_video(agent, env, env_name, ep)
+			debug_agent(env, agent)
+			agent.learn_ensemble(100)
+		if ep % (num_train_eps // 50) == 0:
+			env.visualize_hot_starts(agent.choose_action)
 		done = False
 		observation = env.reset()
 		while not done:
 			action = agent.choose_action(observation)
 			observation_, reward, done, info = env.step(action)
 			agent.store_transition(observation, action, reward, observation_, done)
-			agent.learn_policy(3)
+			horizon = int(linear_schedule(horizon_schedule, ep))
+			agent.learn_policy(horizon)
 			observation = observation_
+		print(f"Episode: {ep}, action: {action}")
 		pbar.update(1)
 	pbar.close()
 	env.close()
-	filename = f'{env_name}_{num_train_eps}_games'
-	figure_file = f'../plots/{filename}.png'
-	plot_learning_curve(test_rewards_i, figure_file)
-	plot_learning_curve(test_rewards, figure_file)
 
 def burn_in(env, agent, total_steps):
 	print("Collecting random experience")
@@ -65,7 +76,14 @@ def burn_in(env, agent, total_steps):
 			observation = observation_
 	print("Finished collecting random experience")
 
-def test_agent(env, agent):
+def debug_agent(env, agent):
+	agent_policy = lambda x: agent.choose_action(x)
+	random_policy = lambda x: env.action_space.sample()
+	r_i, r = test_agent(env, agent, agent_policy)
+	_, _, = test_agent(env, agent, random_policy)
+	agent.debug_model()
+
+def test_agent(env, agent, policy):
 
 	def get_ensemble_disagreement(state, action):
 		state = torch.tensor([state], dtype=torch.float).to(device)
@@ -73,12 +91,12 @@ def test_agent(env, agent):
 		return agent.calc_disagreement(state, action).item()
 
 	rewards_i, rewards = [], []
-	test_eps = 10
+	test_eps = 1
 	for ep in range(test_eps):
 		done, score_i, score = False, 0, 0
 		state = env.reset()
 		while not done:
-			action = agent.choose_action(state)
+			action = policy(state)
 			state_, reward, done, info = env.step(action)
 			score_i += get_ensemble_disagreement(state, action)
 			score += reward
@@ -109,7 +127,7 @@ def test_video(agent, env, env_name, ep):
 
 
 if __name__ == '__main__':
-	arg_env_name = 'Pendulum-v1'
+	arg_env_name = 'HalfCheetah-v3'
 	arg_render = False
 	arg_help = f"{sys.argv[0]} -e <env_name> | use -r to render games from saved policy"
 
